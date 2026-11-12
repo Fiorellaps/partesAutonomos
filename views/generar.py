@@ -1,7 +1,10 @@
 """Página «Generación de Partes»: modelos → partes guardados → editor con versiones, firma y PDF."""
 from __future__ import annotations
 
+import io
 import re
+import uuid
+import zipfile
 from datetime import date, datetime
 from functools import partial
 
@@ -23,7 +26,7 @@ def K(name: str) -> str:
 
 # ───────────────────────── datos ↔ session_state ─────────────────────────
 def defaults(model: Model) -> dict:
-    d: dict = {"RESUMEN": "", "m_fecha": date.today().strftime("%d/%m/%Y")}
+    d: dict = {"RESUMEN": "", "m_fecha": date.today().strftime("%d/%m/%Y"), "photos": []}
     for key, _ in model.header:
         d.setdefault(f"m_{key}", "")
     for sec in model.sections:
@@ -73,7 +76,7 @@ def open_doc(model: Model, doc_id: str | None) -> None:
         S["ver_sel"] = doc["versions"][-1]["n"]
         load_data(model, doc["versions"][-1]["data"])
     else:
-        S["doc_id"] = None
+        S["doc_id"] = uuid.uuid4().hex[:8]  # id reservado desde el principio para poder guardar fotos antes del primer guardado
         S["doc_title"] = ""
         load_data(model, {})
 
@@ -84,8 +87,12 @@ def on_version_change(model: Model) -> None:
     load_data(model, ver["data"])
 
 
-def do_save(model: Model) -> None:
+def do_save(model: Model, only_if_changed: bool = False) -> None:
     data = collect(model)
+    if only_if_changed and S.get("doc_id"):  # al descargar, no duplica la versión si no ha cambiado nada
+        doc = storage.load_doc(model.id, S["doc_id"])
+        if doc and doc["versions"][-1]["data"] == data:
+            return
     title = (S.get("doc_title") or "").strip() or data.get("m_cliente") or "Parte sin título"
     doc = storage.save_version(model.id, S.get("doc_id"), title, data, (S.get("ver_note") or "").strip())
     S["doc_id"], S["doc_title"] = doc["id"], doc["title"]
@@ -95,6 +102,71 @@ def do_save(model: Model) -> None:
         S[K(f"sig_{role}")] = data[f"sig_{role}"]
     S["padver"] = S.get("padver", 0) + 1
     S["flash"] = f"Guardada la versión {S['ver_sel']}"
+
+
+def add_photos(model: Model, widget_key: str) -> None:
+    """Callback de subida/cámara: guarda las fotos en disco y las añade a la lista de la versión en edición."""
+    files = S.get(widget_key)
+    if not files:
+        return
+    if not isinstance(files, list):
+        files = [files]
+    refs = list(S.get(K("photos"), []))
+    for f in files:
+        name = f.name if widget_key.startswith("photo_up") else f"foto_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+        refs.append(storage.add_photo(model.id, S["doc_id"], name, f.getvalue()))
+    S[K("photos")] = refs
+    S["photo_n"] = S.get("photo_n", 0) + 1  # reinicia los widgets para no volver a añadir las mismas fotos
+
+
+def remove_photo(fname: str) -> None:
+    S[K("photos")] = [p for p in S.get(K("photos"), []) if p["file"] != fname]
+
+
+def photos_zip(model: Model, refs: list[dict]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for i, p in enumerate(refs, 1):
+            content = storage.read_photo(model.id, S["doc_id"], p["file"])
+            if content:
+                z.writestr(f"{i:02d}_{re.sub(r'[^A-Za-z0-9._-]+', '_', p['name'])}", content)
+    return buf.getvalue()
+
+
+def photos_section(model: Model) -> None:
+    n = S.get("photo_n", 0)
+    refs = S.get(K("photos"), [])
+    with st.container(border=True, key="card_photos"):
+        st.file_uploader(
+            "Subir fotos", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True,
+            key=f"photo_up_{n}", on_change=add_photos, args=(model, f"photo_up_{n}"),
+        )
+        if st.toggle("📷 Hacer una foto con la cámara", key="photo_cam_on"):
+            st.camera_input(
+                "Cámara", key=f"photo_cam_{n}", on_change=add_photos, args=(model, f"photo_cam_{n}"),
+                label_visibility="collapsed",
+            )
+        if not refs:
+            st.caption("Esta versión aún no tiene fotos.")
+            return
+        st.caption("Las fotos pertenecen a esta versión. Pulsa «Guardar» para conservarlas.")
+        cols = st.columns(3)
+        for i, p in enumerate(refs):
+            content = storage.read_photo(model.id, S["doc_id"], p["file"])
+            with cols[i % 3]:
+                if content is None:
+                    st.caption(f"⚠️ {p['name']} no disponible")
+                else:
+                    st.image(content, caption=p["name"], use_container_width=True)
+                    st.download_button("⬇️", content, file_name=p["name"], key=f"dl_{p['file']}",
+                                       help="Descargar foto", use_container_width=True)
+                st.button("🗑️", key=f"rmph_{p['file']}", on_click=remove_photo, args=(p["file"],),
+                          help="Quitar de esta versión", use_container_width=True)
+        st.download_button(
+            f"⬇️ Descargar todas ({len(refs)}) en ZIP", partial(photos_zip, model, refs),
+            file_name=f"fotos_{pdf_filename({}).removesuffix('.pdf')}.zip", mime="application/zip",
+            key="dl_all_photos", use_container_width=True,
+        )
 
 
 def delete_template(tid: str) -> None:
@@ -188,16 +260,33 @@ def view_new_template() -> None:
     )
 
 
+def matches(doc: dict, query: str) -> bool:
+    """Busca en el nombre del parte y en las notas de todas sus versiones (sin distinguir mayúsculas)."""
+    if not query:
+        return True
+    texts = [doc.get("title", "")] + [v.get("note", "") for v in doc["versions"]]
+    return any(query in t.lower() for t in texts)
+
+
 def view_model(model: Model) -> None:
     st.button("← Modelos", on_click=go, args=("models",), type="tertiary")
     ui.hero(model.name, model.description, crumb="Modelo")
     st.button("➕ Nuevo parte", type="primary", use_container_width=True, on_click=open_doc, args=(model, None))
 
-    docs = storage.list_docs(model.id)
-    ui.section_label(f"Partes guardados ({len(docs)})")
+    all_docs = storage.list_docs(model.id)
+    query = ""
+    if all_docs:
+        query = st.text_input(
+            "Buscar", key="doc_search", placeholder="🔎 Buscar por nombre del parte o nota de versión",
+            label_visibility="collapsed", live="250ms",  # filtra mientras escribes
+        ).strip().lower()
+    docs = [d for d in all_docs if matches(d, query)]
+    count = f"{len(docs)} de {len(all_docs)}" if query else str(len(all_docs))
+    ui.section_label(f"Partes guardados ({count})")
     if not docs:
         with st.container(border=True, key="card_empty"):
-            st.caption("Todavía no hay partes guardados. Crea uno con «Nuevo parte».")
+            st.caption("Ningún parte coincide con la búsqueda." if all_docs
+                       else "Todavía no hay partes guardados. Crea uno con «Nuevo parte».")
     for d in docs:
         last = d["versions"][-1]
         when = datetime.fromisoformat(d["updated"]).strftime("%d/%m/%Y %H:%M")
@@ -206,7 +295,13 @@ def view_model(model: Model) -> None:
             badges.append(ui.badge(last["note"], "muted"))
         with st.container(border=True, key=f"cardlink_doc_{d['id']}"):
             ui.card_head("📄", d["title"], plural(len(d["versions"]), "versión", "versiones"), tuple(badges))
-            st.button("Abrir", key=f"doc_{d['id']}", on_click=open_doc, args=(model, d["id"]), use_container_width=True)
+            c_open, c_del = st.columns([5, 1], vertical_alignment="center")
+            c_open.button("Abrir", key=f"doc_{d['id']}", on_click=open_doc, args=(model, d["id"]),
+                          use_container_width=True)
+            with c_del.popover("🗑️", help="Eliminar parte", use_container_width=True):
+                st.warning(f"¿Eliminar «{d['title']}»? Se borrarán todas sus versiones.")
+                st.button("Sí, eliminar", key=f"del_{d['id']}", on_click=do_delete, args=(model, d["id"]),
+                          type="primary")
 
     if model.custom:
         st.write("")
@@ -256,8 +351,20 @@ def pdf_filename(data: dict) -> str:
 def view_edit(model: Model) -> None:
     if S.get("flash"):
         st.toast(S.pop("flash"), icon="✅")
-    st.button("← Partes", on_click=go, args=("model",), type="tertiary")
     doc = storage.load_doc(model.id, S["doc_id"]) if S.get("doc_id") else None
+
+    # Barra fija arriba: siempre visible al hacer scroll. Los widgets ya tienen su valor actual en session_state.
+    snapshot = collect(model)
+    with st.container(key="stickybar"):
+        b_back, b_save, b_pdf = st.columns(3, vertical_alignment="center")
+        b_back.button("← Partes", use_container_width=True, on_click=go, args=("model",))
+        b_save.button("💾 Guardar", type="primary", use_container_width=True, on_click=do_save, args=(model,))
+        b_pdf.download_button(
+            "⬇️ PDF", partial(model.render, snapshot), file_name=pdf_filename(snapshot),
+            mime="application/pdf", type="primary", use_container_width=True, help="Descargar PDF",
+            on_click=do_save, args=(model, True),  # al descargar también se guarda una versión
+        )
+
     ui.hero(doc["title"] if doc else "Parte nuevo", "" if doc else "Aún sin guardar.", crumb=model.name)
 
     with st.container(border=True, key="card_doc_meta"):
@@ -292,18 +399,13 @@ def view_edit(model: Model) -> None:
         with st.container(border=True, key=f"card_sig_{role}"):
             signature_widget(role, title)
 
+    ui.section_label(f"Fotos ({len(S.get(K('photos'), []))})")
+    photos_section(model)
+
     ui.section_label("Guardar y exportar")
     with st.container(border=True, key="card_actions"):
         st.text_input("Nota de la versión (opcional)", key="ver_note", placeholder="p. ej. Pendiente firma cliente")
-        # El PDF se genera al pulsar «Descargar», con los datos actuales del formulario.
-        snapshot = collect(model)
-        b_save, b_pdf, b_home = st.columns(3)
-        b_save.button("💾 Guardar", type="primary", use_container_width=True, on_click=do_save, args=(model,))
-        b_pdf.download_button(
-            "⬇️ Descargar PDF", partial(model.render, snapshot), file_name=pdf_filename(snapshot),
-            mime="application/pdf", type="primary", use_container_width=True,
-        )
-        b_home.button("🏠 Inicio", use_container_width=True, on_click=go, args=("models",))
+        st.caption("Los botones «Guardar» y «PDF» están en la barra fija de arriba.")
 
     if doc:
         st.write("")

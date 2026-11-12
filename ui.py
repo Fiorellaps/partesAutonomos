@@ -63,6 +63,21 @@ _CSS = """
 }
 [data-testid="stExpander"] summary {font-weight: 600;}
 
+/* Barra de acciones fija (pantalla de edición) */
+/* Streamlit envuelve el contenedor en un div de su mismo alto: el sticky debe ir en ese envoltorio
+   (cuyo padre es el bloque principal, que sí ocupa toda la página). */
+[data-testid="stLayoutWrapper"]:has(> .st-key-stickybar) {
+  position: sticky; top: 3.75rem; z-index: 999;
+}
+.st-key-stickybar {
+  background: rgba(255, 255, 255, .96); backdrop-filter: blur(6px); padding: .5rem .6rem;
+  border: 1px solid #e3e8ef; border-radius: 14px; box-shadow: 0 6px 18px rgba(16, 24, 40, .10);
+}
+/* En móvil Streamlit apila las columnas: aquí las mantenemos en una sola fila */
+.st-key-stickybar [data-testid="stHorizontalBlock"] {flex-wrap: nowrap !important; gap: .4rem;}
+.st-key-stickybar [data-testid="stColumn"] {min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}
+.st-key-stickybar button {padding-left: .4rem; padding-right: .4rem; white-space: nowrap;}
+
 /* Botones */
 .stButton button, .stDownloadButton button {border-radius: 10px; font-weight: 600;}
 </style>

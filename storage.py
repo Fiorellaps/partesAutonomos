@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,34 @@ def save_version(model_id: str, doc_id: str | None, title: str, data: dict, note
 
 def delete_doc(model_id: str, doc_id: str) -> None:
     _path(model_id, doc_id).unlink(missing_ok=True)
+    shutil.rmtree(_photo_dir(model_id, doc_id), ignore_errors=True)
+
+
+# ───────────── fotos: data/<modelo>/<id>_fotos/<fichero> (compartidas entre versiones) ─────────────
+_PHOTO = re.compile(r"^[a-f0-9]{12}\.(jpg|jpeg|png|webp|gif)$")
+
+
+def _photo_dir(model_id: str, doc_id: str) -> Path:
+    return _path(model_id, doc_id).parent / f"{doc_id}_fotos"
+
+
+def add_photo(model_id: str, doc_id: str, original_name: str, content: bytes) -> dict:
+    """Guarda una foto y devuelve su referencia {file, name} para incluirla en los datos de la versión."""
+    ext = Path(original_name).suffix.lower().lstrip(".") or "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        ext = "jpg"
+    fname = f"{uuid.uuid4().hex[:12]}.{ext}"
+    folder = _photo_dir(model_id, doc_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / fname).write_bytes(content)
+    return {"file": fname, "name": original_name or fname}
+
+
+def read_photo(model_id: str, doc_id: str, fname: str) -> bytes | None:
+    if not _PHOTO.match(fname):
+        return None
+    p = _photo_dir(model_id, doc_id) / fname
+    return p.read_bytes() if p.exists() else None
 
 
 def _write(doc: dict) -> None:
