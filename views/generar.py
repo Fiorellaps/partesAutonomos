@@ -348,6 +348,17 @@ def pdf_filename(data: dict) -> str:
     return f"{base or 'parte'}_{date.today():%Y%m%d}.pdf"
 
 
+@st.dialog("Vista previa del PDF", width="large")
+def preview_dialog(model: Model, data: dict) -> None:
+    """Renderiza el PDF con los datos actuales (sin guardar) y muestra cada página como imagen."""
+    import pymupdf
+
+    with pymupdf.open(stream=model.render(data), filetype="pdf") as doc:
+        for i, page in enumerate(doc, 1):
+            st.image(page.get_pixmap(dpi=120).tobytes("png"), caption=f"Página {i} de {len(doc)}",
+                     use_container_width=True)
+
+
 def view_edit(model: Model) -> None:
     if S.get("flash"):
         st.toast(S.pop("flash"), icon="✅")
@@ -356,8 +367,10 @@ def view_edit(model: Model) -> None:
     # Barra fija arriba: siempre visible al hacer scroll. Los widgets ya tienen su valor actual en session_state.
     snapshot = collect(model)
     with st.container(key="stickybar"):
-        b_back, b_save, b_pdf = st.columns(3, vertical_alignment="center")
+        b_back, b_save, b_prev, b_pdf = st.columns(4, vertical_alignment="center")
         b_back.button("← Partes", use_container_width=True, on_click=go, args=("model",))
+        if b_prev.button("👁️ Ver", use_container_width=True, help="Vista previa del PDF"):
+            preview_dialog(model, snapshot)
         b_save.button("💾 Guardar", type="primary", use_container_width=True, on_click=do_save, args=(model,))
         b_pdf.download_button(
             "⬇️ PDF", partial(model.render, snapshot), file_name=pdf_filename(snapshot),
