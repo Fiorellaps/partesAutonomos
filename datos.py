@@ -1,11 +1,11 @@
 """Datos de gestión: histórico de visitas, clientes actuales (visitas pendientes) y comunicaciones.
 
-Cada tabla se guarda como una lista de registros en data/gestion/<tabla>.json.
+Persistencia: Google Sheets en producción (Streamlit Cloud), JSON local como fallback.
+  - En Streamlit Cloud, las credenciales van en [gcp_service_account] dentro de secrets.toml.
+  - En local, si no hay credenciales de GCP, se sigue usando data/gestion/<tabla>.json.
 El histórico y los clientes actuales se cargan desde el Excel «CITAS PANASONIC.xlsx»:
   - pestaña «NO TOCAR»             → histórico (visitas realizadas y cerradas)
   - pestaña «PANASONIC PENDIENTES» → clientes actuales (visitas pendientes)
-En el Excel cada visita ocupa un bloque de 3 filas (la dirección continúa en las filas 2 y 3, y algunas
-celdas están combinadas o desplazadas a la fila 2), así que se leen por bloques.
 """
 from __future__ import annotations
 
@@ -16,11 +16,25 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+import streamlit as st
+
 import storage
 
 DIR = storage.DATA_DIR / "gestion"
 EXCEL_LOCAL = Path(__file__).parent / "CITAS PANASONIC.xlsx"
 TABLAS = ("historico", "pendientes", "comunicaciones")
+
+
+# ───────────────────────── detección de backend ─────────────────────────────
+def _use_sheets() -> bool:
+    """True si hay credenciales de GCP en secrets.toml (Streamlit Cloud o local con secrets)."""
+    try:
+        return "gcp_service_account" in st.secrets
+    except Exception:
+        return False
+
+
+# ───────────────────────── columnas visibles ─────────────────────────
 
 # ───────────────────────── columnas visibles ─────────────────────────
 COLS_HISTORICO = {
@@ -74,8 +88,7 @@ def _file(tabla: str) -> Path:
     return DIR / f"{tabla}.json"
 
 
-def load(tabla: str) -> list[dict]:
-    _auto_import()
+def _json_load(tabla: str) -> list[dict]:
     p = _file(tabla)
     try:
         return json.loads(p.read_text("utf-8")) if p.exists() else []
@@ -83,12 +96,32 @@ def load(tabla: str) -> list[dict]:
         return []
 
 
-def save(tabla: str, rows: list[dict]) -> None:
+def _json_save(tabla: str, rows: list[dict]) -> None:
     p = _file(tabla)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(rows, ensure_ascii=False, default=str), "utf-8")
     tmp.replace(p)
+
+
+def load(tabla: str) -> list[dict]:
+    if _use_sheets():
+        import sheets as _sh
+        rows = _sh.load(tabla)
+        if not rows:
+            _auto_import_sheets()
+            rows = _sh.load(tabla)
+        return rows
+    _auto_import()
+    return _json_load(tabla)
+
+
+def save(tabla: str, rows: list[dict]) -> None:
+    if _use_sheets():
+        import sheets as _sh
+        _sh.save(tabla, rows)
+    else:
+        _json_save(tabla, rows)
 
 
 def new_id() -> str:
@@ -104,11 +137,23 @@ def update(tabla: str, rid: str, **changes) -> None:
 
 
 def _auto_import() -> None:
-    """La primera vez (sin datos guardados) carga el Excel de la carpeta de la app, si existe."""
+    """La primera vez (sin datos en JSON local) carga el Excel de la carpeta de la app, si existe."""
     if _file("pendientes").exists() or _file("historico").exists() or not EXCEL_LOCAL.exists():
         return
     try:
         import_excel(EXCEL_LOCAL.read_bytes())
+    except Exception:
+        pass
+
+
+def _auto_import_sheets() -> None:
+    """Primera vez en Sheets: si el Excel existe en disco, lo importa."""
+    if not EXCEL_LOCAL.exists():
+        return
+    try:
+        import_excel(EXCEL_LOCAL.read_bytes())
+    except Exception:
+        pass
     except Exception:  # un Excel ilegible no debe tumbar la app; se puede importar a mano desde el inicio
         pass
 
