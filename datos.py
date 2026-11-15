@@ -343,9 +343,9 @@ def add_comunicacion(**fields) -> None:
 
 
 # ───────────────────────── WhatsApp ─────────────────────────
-def whatsapp_number(raw: str) -> str | None:
+def whatsapp_number(raw) -> str | None:
     """Número en formato internacional sin «+» para wa.me. Sin prefijo y con 9 cifras se asume España."""
-    first = re.split(r"[/;]| y ", raw or "")[0].strip()
+    first = re.split(r"[/;]| y ", str(raw or ""))[0].strip()
     digits = re.sub(r"\D", "", first)
     if digits.startswith("00"):
         digits = digits[2:]

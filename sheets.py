@@ -82,7 +82,7 @@ def _from_str(s: str) -> Any:
 # ───────────── lectura / escritura ──────────────────────────────────────────
 def load(tabla: str) -> list[dict]:
     ws = _ws(tabla)
-    rows = ws.get_all_records(default_blank="", head=1)
+    rows = ws.get_all_records(default_blank="", head=1, numericise_ignore=["all"])
     return [dict(r) for r in rows]
 
 
