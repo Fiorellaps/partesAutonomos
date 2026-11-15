@@ -344,14 +344,29 @@ def add_comunicacion(**fields) -> None:
 
 # ───────────────────────── WhatsApp ─────────────────────────
 def whatsapp_number(raw) -> str | None:
-    """Número en formato internacional sin «+» para wa.me. Sin prefijo y con 9 cifras se asume España."""
-    first = re.split(r"[/;]| y ", str(raw or ""))[0].strip()
+    """Número en formato internacional sin «+» para wa.me.
+
+    Casos que se normalizan:
+    - «+34 685 278 126» → «34685278126»
+    - «0034...»         → «34...»
+    - «00447311451838 / Tlf España: 611197306» → primer número antes de «/»
+    - «9 cifras empezando por 6/7» sin prefijo → añade «34»
+    - Espacios, guiones y paréntesis se eliminan siempre
+    """
+    # tomar solo el primer número si hay varios separados por / ; " y " o "Tlf"
+    first = re.split(r"[/;]|\s+y\s+|\s+Tlf\b", str(raw or ""), maxsplit=1)[0].strip()
+    # quitar caracteres no numéricos salvo el + inicial
+    has_plus = first.startswith("+")
     digits = re.sub(r"\D", "", first)
+    # eliminar «00» o «+» como prefijo de código de país
     if digits.startswith("00"):
         digits = digits[2:]
-    if len(digits) == 9 and digits[0] in "6789":
+    # 9 cifras empezando por 6, 7 o 9 → España
+    if len(digits) == 9 and digits[0] in "679":
         digits = "34" + digits
-    return digits if len(digits) >= 8 else None
+    # 10 cifras con «34» al principio (ej. 34658437536) ya están bien
+    # 971564489874 (12 dígitos, empieza por 971...) → se deja como está
+    return digits if len(digits) >= 7 else None
 
 
 def whatsapp_url(raw: str, text: str = "") -> str | None:
