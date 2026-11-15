@@ -188,21 +188,20 @@ def view_models() -> None:
     ui.hero("Generación de Partes", "Elige el modelo de parte con el que quieres trabajar.", crumb="Inicio")
     ui.section_label("Modelos disponibles")
     models = list(all_models().values())
-    cols = st.columns(2)
-    for i, m in enumerate(models):
-        n = len(storage.list_docs(m.id))
-        badges = [ui.badge(m.brand)] if m.brand else []
-        if m.custom:
-            badges.append(ui.badge("Plantilla propia"))
-        badges.append(ui.badge(plural(n, "parte guardado", "partes guardados"), "ok" if n else "muted"))
-        with cols[i % 2].container(border=True, key=f"cardlink_model_{m.id}"):
-            ui.card_head(m.icon, m.name, m.description, tuple(badges))
-            st.button("Abrir modelo →", key=f"open_{m.id}", on_click=go, args=("model", m.id),
-                      type="primary", use_container_width=True)
-    # Tarjeta «añadir» en la siguiente celda libre de la cuadrícula
-    with cols[len(models) % 2].container(border=True, key="card_add_template"):
-        ui.card_head("➕", "Añadir plantilla", "Sube un PDF rellenable y se genera su formulario.")
-        st.button("Añadir plantilla (PDF)", on_click=go, args=("new_template",), use_container_width=True)
+    with ui.card_grid("modelos"):
+        for m in models:
+            n = len(storage.list_docs(m.id))
+            badges = [ui.badge(m.brand)] if m.brand else []
+            if m.custom:
+                badges.append(ui.badge("Plantilla propia"))
+            badges.append(ui.badge(plural(n, "parte guardado", "partes guardados"), "ok" if n else "muted"))
+            with st.container(border=True, key=f"cardlink_model_{m.id}"):
+                ui.card_head(m.icon, m.name, m.description, tuple(badges))
+                st.button("Abrir modelo →", key=f"open_{m.id}", on_click=go, args=("model", m.id),
+                          type="primary", use_container_width=True)
+        with st.container(border=True, key="card_add_template"):  # última celda de la rejilla
+            ui.card_head("➕", "Añadir plantilla", "Sube un PDF rellenable y se genera su formulario.")
+            st.button("Añadir plantilla (PDF)", on_click=go, args=("new_template",), use_container_width=True)
 
 
 def finish_template(name: str, pdf: bytes, rows) -> None:

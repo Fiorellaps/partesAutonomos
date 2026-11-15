@@ -5,3 +5,7 @@ data/
 # repositorio propio: github.com/Fiorellaps/servisync-campaign
 campaign/
 .DS_Store
+
+# Excel con datos de clientes (se importa desde la app, no se sube)
+*.xlsx
+~$*
